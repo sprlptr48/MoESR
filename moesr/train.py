@@ -25,6 +25,7 @@ def main() -> None:
         val_tile_size=args.val_tile_size,
         val_tile_overlap=args.val_tile_overlap,
         full_checkpoints=args.full_checkpoints,
+        gradient_checkpointing=args.gradient_checkpointing,
         compile_model=args.compile,
     )
     trainer = build_default_trainer(model_config, trainer_config, device=args.device)

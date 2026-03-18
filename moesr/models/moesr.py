@@ -42,6 +42,12 @@ class MoESR(nn.Module):
             "aux_loss": total_aux,
         }
 
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        """Enable gradient checkpointing in both SR stages."""
+
+        self.stage1.set_gradient_checkpointing(enabled)
+        self.stage2.set_gradient_checkpointing(enabled)
+
 
 MoeSR = MoESR
 

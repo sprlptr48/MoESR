@@ -5,6 +5,7 @@ from typing import Tuple
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .config import MoESRConfig
 from .transformer_block import SRTransformerBlock
@@ -61,6 +62,7 @@ class SRStage(nn.Module):
 
     def __init__(self, config: MoESRConfig, num_blocks: int, block_offset: int, scale: int = 2) -> None:
         super().__init__()
+        self.gradient_checkpointing = False
         self.embed_proj = nn.Conv2d(config.embed_dim, config.embed_dim, kernel_size=3, padding=1)
         self.blocks = nn.ModuleList(
             [SRTransformerBlock(config, block_idx=block_offset + idx) for idx in range(num_blocks)]
@@ -71,13 +73,21 @@ class SRStage(nn.Module):
             self.upsampler = NearestConvUpsampler(config.embed_dim, scale)
         self.to_rgb = nn.Conv2d(config.embed_dim, config.image_channels, kernel_size=3, padding=1)
 
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        """Enable activation checkpointing for transformer blocks."""
+
+        self.gradient_checkpointing = enabled
+
     def forward(self, x: Tensor, x_lr: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         feat = self.embed_proj(x)
         feat = feat.permute(0, 2, 3, 1).contiguous()
         aux_loss = feat.new_zeros(())
         num_blocks = max(len(self.blocks), 1)
         for block in self.blocks:
-            feat, block_aux = block(feat)
+            if self.gradient_checkpointing and self.training:
+                feat, block_aux = checkpoint(block, feat, use_reentrant=False)
+            else:
+                feat, block_aux = block(feat)
             aux_loss = aux_loss + block_aux
         aux_loss = aux_loss / num_blocks
         feat = feat.permute(0, 3, 1, 2).contiguous()

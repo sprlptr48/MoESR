@@ -49,6 +49,7 @@ class TrainerConfig:
     val_tile_overlap: int = 16
     log_interval: int = 100
     full_checkpoints: bool = False
+    gradient_checkpointing: bool = False
     compile_model: bool = False
     mixed_precision: bool = True
 
@@ -185,6 +186,7 @@ class MoESRTrainer:
         self.device = device
         self.config = trainer_config
         self.model = model.to(device)
+        self.model.set_gradient_checkpointing(trainer_config.gradient_checkpointing)
         if trainer_config.compile_model and hasattr(torch, "compile"):
             self.model = torch.compile(self.model, mode="reduce-overhead")
         self.criterion = MoESRLoss(model_config).to(device)
@@ -423,6 +425,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--val-tile-overlap", type=int, default=16)
     parser.add_argument("--resume", default=None)
     parser.add_argument("--full-checkpoints", action="store_true")
+    parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--device", default=None)
     return parser
