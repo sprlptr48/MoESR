@@ -19,10 +19,12 @@ def main() -> None:
         num_workers=args.num_workers,
         max_steps=args.steps,
         log_interval=args.log_interval,
+        checkpoint_interval=args.checkpoint_interval,
         val_interval=args.val_interval,
         val_max_images=args.val_max_images,
         val_tile_size=args.val_tile_size,
         val_tile_overlap=args.val_tile_overlap,
+        full_checkpoints=args.full_checkpoints,
         compile_model=args.compile,
     )
     trainer = build_default_trainer(model_config, trainer_config, device=args.device)

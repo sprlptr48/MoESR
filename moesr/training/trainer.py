@@ -7,6 +7,7 @@ from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
+import warnings
 
 import torch
 from PIL import Image
@@ -41,12 +42,13 @@ class TrainerConfig:
     learning_rate: float = 2e-4
     weight_decay: float = 0.01
     grad_clip_norm: float = 1.0
-    checkpoint_interval: int = 100
+    checkpoint_interval: int = 10_000
     val_interval: int = 2_000
     val_max_images: int = 0
     val_tile_size: int = 0
     val_tile_overlap: int = 16
     log_interval: int = 100
+    full_checkpoints: bool = False
     compile_model: bool = False
     mixed_precision: bool = True
 
@@ -225,29 +227,45 @@ class MoESRTrainer:
 
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint["model"])
-        self.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.scheduler.load_state_dict(checkpoint["scheduler"])
-        self.scaler.load_state_dict(checkpoint["scaler"])
+        if "optimizer" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+        else:
+            warnings.warn("Checkpoint does not include optimizer state; resuming model weights only.")
+        if "scheduler" in checkpoint:
+            self.scheduler.load_state_dict(checkpoint["scheduler"])
+        if "scaler" in checkpoint:
+            self.scaler.load_state_dict(checkpoint["scaler"])
         self.global_step = int(checkpoint.get("global_step", 0))
         self.best_psnr = float(checkpoint.get("best_psnr", float("-inf")))
 
     def _move_batch(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
         return {key: value.to(self.device, non_blocking=True) for key, value in batch.items()}
 
-    def save_checkpoint(self, name: str) -> None:
+    def save_checkpoint(self, name: str, include_optimizer: Optional[bool] = None) -> None:
         """Save a training checkpoint."""
 
+        include_optimizer = self.config.full_checkpoints if include_optimizer is None else include_optimizer
         checkpoint = {
             "model": self.model.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
-            "scheduler": self.scheduler.state_dict(),
-            "scaler": self.scaler.state_dict(),
             "global_step": self.global_step,
             "best_psnr": self.best_psnr,
             "model_config": asdict(self.model.config),
             "trainer_config": asdict(self.config),
         }
-        torch.save(checkpoint, self.output_dir / name)
+        if include_optimizer:
+            checkpoint["optimizer"] = self.optimizer.state_dict()
+            checkpoint["scheduler"] = self.scheduler.state_dict()
+            checkpoint["scaler"] = self.scaler.state_dict()
+
+        output_path = self.output_dir / name
+        temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+        try:
+            torch.save(checkpoint, temp_path)
+            temp_path.replace(output_path)
+        except (RuntimeError, OSError) as exc:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            print(f"[warn] Failed to save checkpoint {output_path.name}: {exc}")
 
     def validate(self) -> Dict[str, float]:
         """Run validation and return averaged metrics."""
@@ -343,7 +361,7 @@ class MoESRTrainer:
                 print(f"[val] step={self.global_step} psnr={metrics['psnr']:.3f} loss={metrics['loss']:.4f}")
                 if metrics["psnr"] > self.best_psnr:
                     self.best_psnr = metrics["psnr"]
-                    self.save_checkpoint("best.pt")
+                    self.save_checkpoint("best.pt", include_optimizer=False)
 
             if self.global_step % self.config.checkpoint_interval == 0:
                 self.save_checkpoint(f"step_{self.global_step}.pt")
@@ -398,11 +416,13 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--steps", type=int, default=500_000)
     parser.add_argument("--log-interval", type=int, default=100)
+    parser.add_argument("--checkpoint-interval", type=int, default=10_000)
     parser.add_argument("--val-interval", type=int, default=2_000)
     parser.add_argument("--val-max-images", type=int, default=0)
     parser.add_argument("--val-tile-size", type=int, default=0)
     parser.add_argument("--val-tile-overlap", type=int, default=16)
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--full-checkpoints", action="store_true")
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--device", default=None)
     return parser
